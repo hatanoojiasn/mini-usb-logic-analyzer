@@ -1,19 +1,29 @@
 name: CI
+
 on: [push, pull_request]
+
 jobs:
   build:
     runs-on: ubuntu-24.04
+
     steps:
-    - name: Install toolchain
-    run: |
-      sudo apt update
-      sudo apt-get install -y gcc-arm-none-eabi cppcheck clang-tidy
-    -name: Build dummmy
-    run: |
-      arm-none-eabi-gcc -Wall -Werror \
-        -mcpu=cortex=m4 -mthumb tests/dummy/main.c\
-        -o build/main.o
-    -name: Static analysis
-    run: |
-      cppcheck --enable=all --std=c11\
-        tests/dummy
+      # 1) ツールチェーンを入れる
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-none-eabi \
+            cppcheck \
+            clang-tidy
+
+      # 2) ダミーをビルド
+      - name: Build dummy
+        run: |
+          arm-none-eabi-gcc -Wall -Werror \
+            -mcpu=cortex-m4 -mthumb tests/dummy/main.c \
+            -o build/main.o
+
+      # 3) 静的解析
+      - name: Static analysis
+        run: |
+          cppcheck --enable=all --std=c11 tests/dummy
