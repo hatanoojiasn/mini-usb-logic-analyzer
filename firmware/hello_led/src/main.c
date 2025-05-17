@@ -1,4 +1,4 @@
-#include <Arudino.h>
+#include <Arduino.h>
 #define LED_BUILTIN 15
 int main(void){
     pinMode(LED_BUILTIN, OUTPUT);
