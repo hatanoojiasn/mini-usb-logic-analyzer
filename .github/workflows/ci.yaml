@@ -7,7 +7,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # 1) ツールチェーンを入れる
+      # 0) リポジトリをチェックアウト ← これが必須
+      - uses: actions/checkout@v4
+
+      # 1) ツールチェーンをインストール
       - name: Install toolchain
         run: |
           sudo apt-get update
@@ -16,14 +19,15 @@ jobs:
             cppcheck \
             clang-tidy
 
-      # 2) ダミーをビルド
+      # 2) ダミーをビルド（-c でコンパイルのみ）
       - name: Build dummy
         run: |
-          arm-none-eabi-gcc -Wall -Werror \
-            -mcpu=cortex-m4 -mthumb tests/dummy/main.c \
-            -o build/main.o
+          mkdir -p build
+          arm-none-eabi-gcc -Wall -Werror -mcpu=cortex-m4 -mthumb \
+            -c tests/dummy/main.c -o build/main.o
 
       # 3) 静的解析
       - name: Static analysis
         run: |
           cppcheck --enable=all --std=c11 tests/dummy
+
