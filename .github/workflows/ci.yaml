@@ -1,13 +1,14 @@
 name: CI
-on: [push,pull_request]
+on: [push, pull_request]
 jobs:
   build:
-    runs-on: ubuntu-latest
-    -name: Insatll tollchain
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Install toolchain
     run: |
       sudo apt update
       sudo apt-get install -y gcc-arm-none-eabi cppcheck clang-tidy
-    -name:Build dummmy
+    -name: Build dummmy
     run: |
       arm-none-eabi-gcc -Wall -Werror \
         -mcpu=cortex=m4 -mthumb tests/dummy/main.c\
