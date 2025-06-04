@@ -1,0 +1,22 @@
+%% docs/C1_DMA_block.mmd
+graph LR
+  %% --------- キャプチャ経路 ----------
+  subgraph "Capture Path"
+    TC0["TC0<br/>COUNT16<br/>Match @12 MHz"]
+    EVSYS["EVSYS CH0<br/>TC0_Match Event"]
+    DMAC["DMAC CH0<br/>SRCINC=0<br/>DSTINC=1<br/>CIRC"]
+    PORT_IN["PORTB.IN<br/>PB16–PB21"]
+    RAM["SRAM<br/>Ring Buffer<br/>8 KiB"]
+
+    TC0 -->|event| EVSYS -->|trigger| DMAC
+    PORT_IN -- read --> DMAC
+    DMAC    -- word --> RAM
+  end
+
+  %% --------- 転送・可視化 ----------
+  CPU["Cortex-M4F<br/>read_ptr / write_ptr"]
+  USB["USB Device<br/>EP1 BULK"]
+
+  RAM -- bulk packet --> USB
+  CPU -- DMA 設定／USB 転送 --> USB
+  CPU --- RAM   %% 管理ポインタ更新
