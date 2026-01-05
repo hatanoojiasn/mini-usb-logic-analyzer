@@ -2,11 +2,11 @@
 #include "samd.h"
 #include "clock.h"
 uint32_t buf[BUF_WORDS];
-static DmacDescriptor dma_desc    __attribute__((aligned(16)));
-static DmacDescriptor dma_desc_wb __attribute__((aligned(16))); // Write-Back用(必須)
-static uint32_t buf_brocks [NumBrocks][BUF_WORDS];
-static DmacDescriptor channel_dam_desc[DMA_CH_NUM] __attribute__((aligned(16)));
-static DmacDescriptor dma_descs[NumBrocks] __attribute__((aligned(16)));
+DmacDescriptor dma_desc    __attribute__((aligned(16)));
+DmacDescriptor dma_desc_wb __attribute__((aligned(16))); // Write-Back用(必須)
+uint32_t buf_brocks [NumBrocks][BUF_WORDS];
+DmacDescriptor channel_dma_desc[DMA_CH_NUM] __attribute__((aligned(16)));
+DmacDescriptor dma_descs[NumBrocks] __attribute__((aligned(16)));
 void dma_global_enable()
 {
     Serial.println("Setting up DMA...");
@@ -18,9 +18,8 @@ void dma_global_enable()
     DMAC->CTRL.bit.SWRST = 1;
     while (DMAC->CTRL.bit.SWRST);
 
-    // ディスクリプタのアドレス設定
-    DMAC->BASEADDR.reg = (uint32_t)&dma_desc;
-    DMAC->WRBADDR.reg  = (uint32_t)&dma_desc_wb; // ★ここが必須
+    DMAC->BASEADDR.reg = (uint32_t)&channel_dma_desc[0];
+    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb; 
 
     // 全プライオリティレベルを有効化してDMA有効化
     DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xF);
@@ -31,10 +30,10 @@ void dma_global_enable()
 bool dma_mem2mem_once(int src, int dst,int words)
 {
     // 1. チャネルを無効化してリセット
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.ENABLE);
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.SWRST);
+
+    dma_channel_common_init(DMAC_CH_ID);
+    // 1. チャネルを無効化してリセット
+    dma_channel_reset(DMAC_CH_ID);
 
     // 2. チャネルを有効化して設定
     dma_desc.BTCTRL.reg = DMAC_BTCTRL_VALID |
@@ -48,24 +47,17 @@ bool dma_mem2mem_once(int src, int dst,int words)
     dma_desc.DSTADDR.reg = (uint32_t) &buf[dst+words];//書き込み先を設定
     dma_desc.BTCNT.reg = words;//転送するデータ数を設定
 
-    DMAC->Channel[DMAC_CH_ID].CHEVCTRL.reg = DMAC_CHEVCTRL_EVIE|
-    DMAC_CHEVCTRL_EVACT_TRIG; // イベント有効化
-
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = 
-    DMAC_CHCTRLA_TRIGSRC(DMAC_CHCTRLA_TRIGSRC_DISABLE_Val) | // TC0 MC0 トリガー
-    DMAC_CHCTRLA_TRIGACT_BLOCK |             // トリガでブロック転送
-    DMAC_CHCTRLA_ENABLE;                     // 有効化
+    dma_channel_set_trig(DMAC_CH_ID, DMA_TRIG_PERIPHERAL);
     return true;
 }
 bool dma_gpio_sample_once(int reg, int dst, int words)
 {
     if (words > BUF_WORDS) words = BUF_WORDS;
 
+
+    dma_channel_common_init(DMAC_CH_ID);
     // 1. チャネルを無効化してリセット
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.ENABLE);
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.SWRST);
+    dma_channel_reset(DMAC_CH_ID);
 
     // 2. ディスクリプタの設定
     dma_desc.BTCTRL.reg = DMAC_BTCTRL_VALID |
@@ -101,9 +93,9 @@ void setup_dma_for_memtest(const void* src, void* dst, uint32_t words)
 {
     Serial.println("Setting up DMA for Memory Test...");
 
-    // 1. DMACのクロックを有効化
-    MCLK->AHBMASK.bit.DMAC_ = 1;
-
+    dma_channel_common_init(DMAC_CH_ID);
+    // 1. チャネルを無効化してリセット
+    dma_channel_reset(DMAC_CH_ID);
     // 2. DMAディスクリプタ（転送内容）の設定
     dma_desc.BTCTRL.reg = DMAC_BTCTRL_VALID |         // ディスクリプタを有効に
                           DMAC_BTCTRL_DSTINC |        // 宛先アドレスはインクリメントする
@@ -118,16 +110,8 @@ void setup_dma_for_memtest(const void* src, void* dst, uint32_t words)
     DMAC->Channel[DMAC_CH_ID].CHEVCTRL.reg = DMAC_CHEVCTRL_EVIE|
     DMAC_CHEVCTRL_EVACT_TRIG; // イベント有効化
 
-    // 3. DMACの基本設定
-    DMAC->BASEADDR.reg = (uint32_t)&dma_desc; // ディスクリプタのアドレスを設定
-    DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE;     // DMAを有効化
-
-    // 4. DMAチャネルの設定
-    //    チャネルはこの時点では有効化しない
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = 
-        DMAC_CHCTRLA_TRIGSRC(DMAC_CHCTRLA_TRIGSRC_DISABLE_Val) |                 // ソフトウェアトリガ
-        DMAC_CHCTRLA_TRIGACT_BLOCK;         // ★トリガソース: 0x00 (ソフトウェアトリガのみ)
-    
+    // 3. チャネルの設定と有効化
+    dma_channel_set_trig(DMAC_CH_ID, DMA_TRIG_PERIPHERAL);
     Serial.println("DMA Memory Test setup complete.");
 }
 
@@ -149,37 +133,63 @@ void setup_evesys_for_tc_dma()
                                             
     Serial.println("Event System setup complete.");
 }
-void setup_dma_ringbuf()
+void setup_dma_ringbuf(uint8_t ch_id)
 {
+    dma_channel_common_init(DMAC_CH_ID);
     Serial.println("SETUP DMA RING BUF");
-    // 1. チャネルを無効化してリセット
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.ENABLE);
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = 0;
-    while (DMAC->Channel[DMAC_CH_ID].CHCTRLA.bit.SWRST);
+    dma_channel_reset(DMAC_CH_ID);
 // 2. チャネルを有効化して設定
     for(int i=0;i<NumBrocks;i++)
     {
-        dma_descs[i].SRCADDR.reg =  (uint32_t)&PORT->Group[PORTGROUP].IN.reg + beatsize_byte; //読み込み元を設定
+        dma_descs[i].SRCADDR.reg =  (uint32_t)&PORT->Group[PORTGROUP].IN.reg + sizeof(uint32_t); //読み込み元を設定
         dma_descs[i].DSTADDR.reg = (uint32_t)&buf_brocks[i][BUF_WORDS]; //書き込み先を設定
         dma_descs[i].BTCTRL.reg  = DMAC_BTCTRL_DSTINC | DMAC_BTCTRL_BEATSIZE_WORD | DMAC_BTCTRL_BLOCKACT_INT;
         dma_descs[i].DESCADDR.reg = (uint32_t)&dma_descs[(i+1)%NumBrocks];
         dma_descs[i].BTCNT.reg = BUF_WORDS;//転送するデータ数を設定
         dma_descs[i].BTCTRL.bit.VALID = 1;
     }
-    for (int i = 0; i < DMA_CH_NUM; i++)
-    {
-        channel_dam_desc[i].DESCADDR.reg = (uint32_t)&dma_descs[0];
-        channel_dam_desc[i].BTCNT.reg = BUF_WORDS;
-        channel_dam_desc[i].BTCTRL.bit.VALID = 1;
-    }
-    DMAC->Channel[DMAC_CH_ID].CHEVCTRL.reg = DMAC_CHEVCTRL_EVIE | DMAC_CHEVCTRL_EVACT_TRIG;
-    DMAC->BASEADDR.reg = (uint32_t)&channel_dam_desc[0];
-    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb; 
-    DMAC->Channel[DMAC_CH_ID].CHCTRLA.reg = 
-        DMAC_CHCTRLA_TRIGSRC(DMAC_CHCTRLA_TRIGSRC_DISABLE_Val) |
-        DMAC_CHCTRLA_TRIGACT_TRANSACTION |         // トリガでトランザクション転送
-        DMAC_CHCTRLA_ENABLE;                     // 有効化
-    Serial.println("SETUP DMA RING BUF END");
 
+        channel_dma_desc[ch_id].DESCADDR.reg = (uint32_t)&dma_descs[0];
+        channel_dma_desc[ch_id].BTCTRL.bit.VALID = 1;
+        dma_channel_set_trig(DMAC_CH_ID, DMA_TRIG_EVESYS);
+    Serial.println("SETUP DMA RING BUF END");
+}
+void dma_channel_reset(uint8_t ch_id)
+{
+    DMAC->Channel[ch_id].CHCTRLA.bit.ENABLE = 0;
+    DMAC->Channel[ch_id].CHCTRLA.bit.SWRST = 1;
+    while (DMAC->Channel[ch_id].CHCTRLA.bit.SWRST);
+}
+void dma_channel_common_init(uint8_t ch_id)
+{
+    
+    // 1. DMACのクロックを有効化
+    MCLK->AHBMASK.bit.DMAC_ = 1;
+    // 2. DMACの基本設定
+    DMAC->Channel[ch_id].CHINTENSET.reg= DMAC_CHINTENSET_TCMPL;
+    DMAC->Channel[ch_id].CHEVCTRL.reg = 0;//デフォルトはイベント無効
+    DMAC->BASEADDR.reg = (uint32_t)&channel_dma_desc[0];
+    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb; 
+}
+void dma_channel_common_enable(uint8_t ch_id)
+{
+    DMAC->Channel[ch_id].CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
+}
+void dma_channel_set_trig(uint8_t ch_id, dma_trig_type trig_type)
+{
+    if(trig_type == DMA_TRIG_EVESYS)
+    {
+        DMAC->Channel[ch_id].CHEVCTRL.reg = DMAC_CHEVCTRL_EVIE | DMAC_CHEVCTRL_EVACT_TRIG;
+        DMAC->Channel[ch_id].CHCTRLA.reg = 
+        DMAC_CHCTRLA_TRIGSRC(DMAC_CHCTRLA_TRIGSRC_DISABLE_Val) |
+        DMAC_CHCTRLA_TRIGACT_TRANSACTION;        // トリガでトランザクション転送
+    }
+    else
+    {
+        DMAC->Channel[ch_id].CHEVCTRL.reg = 0;//イベント無効
+        DMAC->Channel[ch_id].CHCTRLA.reg = 
+        DMAC_CHCTRLA_TRIGSRC(DMA_TRIGSRC_TC0_MC0) | // トリガソース: TC0 MC0
+        DMAC_CHCTRLA_TRIGACT_TRANSACTION;        // トリガでトランザクション転送
+    }    
+    dma_channel_common_enable(ch_id);
 }
