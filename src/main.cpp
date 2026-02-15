@@ -2,49 +2,26 @@
 #include "clock.h"
 #include "tc.h"
 #include "dma.h"
+#include "capture_ring.h"
 #define CAPTURE_PORT_GROUP 0
  uint8_t  GROUP = 0;        // PORTA
  uint8_t  PIN   = 10;
  uint32_t MASK  = (1u << PIN);
 void setup()
 {
-    /*
     Serial.begin(115200);
-    while(!Serial);
-    Serial.println("DMA Test1");
-    setup_clock();
-    setup_tc();
-    dma_global_enable();
-       Serial.println("SetupEnd");
-
-  dma_gpio_sample_once(0,0,256);
-// 1) ポート準備
-MCLK->APBBMASK.bit.PORT_ = 1;
-PORT->Group[GROUP].DIRCLR.reg = MASK;        // 入力方向
-PORT->Group[GROUP].PINCFG[PIN].bit.INEN = 1; // 入力バッファON
-PORT->Group[GROUP].PINCFG[PIN].bit.PULLEN = 1;
-PORT->Group[CAPTURE_PORT_GROUP].DIRSET.reg = MASK;       // 出力化
-PORT->Group[CAPTURE_PORT_GROUP].OUTCLR.reg = MASK;       // 初期Low
-*/
-Serial.begin(115200);
     while (!Serial);
-    Serial.println("DMA Memory Test Start");
+    Serial.println("DMA Ring Capture Start");
     setup_clock();
     setup_tc();
     setup_evesys_for_tc_dma();
     dma_global_enable();
-
-while(1){
-dma_gpio_sample_once(0, 0, 16);  // 1 回だけ有効化
-
-while(!(DMAC->Channel[DMAC_CH_ID].CHINTFLAG.reg & DMAC_CHINTFLAG_TCMPL));
-DMAC->Channel[DMAC_CH_ID].CHINTFLAG.reg = DMAC_CHINTFLAG_TCMPL; // フラグクリア
-
-// 結果表示
-for (int i = 0; i < 16; i++) {
-    Serial.printf("buf[%d]=%08lX\n", i, buf[i]);
-}
-}
+    MCLK->APBBMASK.bit.PORT_ = 1;
+    PORT->Group[GROUP].DIRCLR.reg = MASK;
+    PORT->Group[GROUP].PINCFG[PIN].bit.INEN = 1;
+    PORT->Group[GROUP].PINCFG[PIN].bit.PULLEN = 1;
+    capture_ring_init();
+    setup_dma_ringbuf(DMAC_CH_ID);
     // // --- データの準備 ---
     // // 転送元のデータ (buf[0]) に特徴的な値を入れる
     // buf[0] = 0xDEADBEEF;
@@ -90,15 +67,25 @@ for (int i = 0; i < 16; i++) {
 }
 void loop()
 {
-       /* static uint32_t tick = 0;
-    if ((tick++ & 0x7FFF) == 0) {                     // 適当な周期
-        PORT->Group[CAPTURE_PORT_GROUP].OUTTGL.reg = MASK;
-    }
-        for(int i=0;i<16;i++)
+    static uint32_t last_log_ms = 0;
+    uint32_t block_index = 0;
+    if (capture_pop_block(&block_index))
     {
-        Serial.printf("buf[%d]=%08X\n",i,buf[i]);
+        uint8_t* block_ptr = capture_block_ptr(block_index);
+        uint32_t block_size = capture_block_size();
+        if (block_ptr != nullptr && block_size > 0)
+        {
+            const uint32_t sample = *reinterpret_cast<uint32_t*>(block_ptr);
+            Serial.printf("block=%lu sample=0x%08lX\n", block_index, sample);
+        }
+        capture_mark_consumed(block_index);
     }
-  
-    delay(1000);
-*/
+
+    const uint32_t now_ms = millis();
+    if ((now_ms - last_log_ms) > 1000)
+    {
+        last_log_ms = now_ms;
+        const capture_stats_t* stats = capture_stats();
+        Serial.printf("completed=%lu overrun=%lu\n", stats->completed_blocks, stats->overrun_count);
+    }
 }

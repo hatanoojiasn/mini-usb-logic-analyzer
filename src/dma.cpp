@@ -1,12 +1,14 @@
 #include "dma.h"
 #include "samd.h"
 #include "clock.h"
+#include "capture_ring.h"
 uint32_t buf[BUF_WORDS];
 DmacDescriptor dma_desc    __attribute__((aligned(16)));
-DmacDescriptor dma_desc_wb __attribute__((aligned(16))); // Write-Back用(必須)
+DmacDescriptor dma_desc_wb[DMA_CH_NUM] __attribute__((aligned(16))); // Write-Back用(必須)
 uint32_t buf_brocks [NumBrocks][BUF_WORDS];
 DmacDescriptor channel_dma_desc[DMA_CH_NUM] __attribute__((aligned(16)));
 DmacDescriptor dma_descs[NumBrocks] __attribute__((aligned(16)));
+volatile uint32_t dma_block_write_index = 0;
 void dma_global_enable()
 {
     Serial.println("Setting up DMA...");
@@ -19,12 +21,12 @@ void dma_global_enable()
     while (DMAC->CTRL.bit.SWRST);
 
     DMAC->BASEADDR.reg = (uint32_t)&channel_dma_desc[0];
-    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb; 
+    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb[0]; 
 
     // 全プライオリティレベルを有効化してDMA有効化
     DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xF);
 
-    Serial.printf("DMAC setup complete. BASE=0x%08lX WB=0x%08lX\n", (uint32_t)&dma_desc, (uint32_t)&dma_desc_wb);
+    Serial.printf("DMAC setup complete. BASE=0x%08lX WB=0x%08lX\n", (uint32_t)&dma_desc, (uint32_t)&dma_desc_wb[0]);
 }
 
 bool dma_mem2mem_once(int src, int dst,int words)
@@ -169,7 +171,7 @@ void dma_channel_common_init(uint8_t ch_id)
     DMAC->Channel[ch_id].CHINTENSET.reg= DMAC_CHINTENSET_TCMPL;
     DMAC->Channel[ch_id].CHEVCTRL.reg = 0;//デフォルトはイベント無効
     DMAC->BASEADDR.reg = (uint32_t)&channel_dma_desc[0];
-    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb; 
+    DMAC->WRBADDR.reg = (uint32_t)&dma_desc_wb[0]; 
 }
 void dma_channel_common_enable(uint8_t ch_id)
 {
@@ -192,4 +194,14 @@ void dma_channel_set_trig(uint8_t ch_id, dma_trig_type trig_type)
         DMAC_CHCTRLA_TRIGACT_TRANSACTION;        // トリガでトランザクション転送
     }    
     dma_channel_common_enable(ch_id);
+}
+
+extern "C" void DMAC_0_Handler(void)
+{
+    if (DMAC->Channel[DMAC_CH_ID].CHINTFLAG.bit.TCMPL)
+    {
+        DMAC->Channel[DMAC_CH_ID].CHINTFLAG.reg = DMAC_CHINTFLAG_TCMPL;
+        capture_ring_push(dma_block_write_index);
+        dma_block_write_index = (dma_block_write_index + 1) % NumBrocks;
+    }
 }
