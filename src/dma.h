@@ -17,6 +17,7 @@
 extern uint32_t buf_brocks [NumBrocks][BUF_WORDS];
 extern uint32_t buf[BUF_WORDS];
 extern DmacDescriptor dma_desc    __attribute__((aligned(16)));
+extern DmacDescriptor dma_desc_wb[DMA_CH_NUM] __attribute__((aligned(16)));
 extern DmacDescriptor dma_descs[NumBrocks] __attribute__((aligned(16)));
 extern DmacDescriptor channel_dma_desc[DMA_CH_NUM] __attribute__((aligned(16)));
 typedef enum{
